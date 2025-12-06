@@ -1,47 +1,30 @@
 import type { ToolDefinition, ToolHandler } from "./types";
 
+// Import new government verification tools
 import {
-  reportProblemTool,
-  reportProblemHandler,
-  upvoteProblemTool,
-  upvoteProblemHandler,
-  listTopProblemsTool,
-  listTopProblemsHandler,
-  getProblemDetailsTool,
-  getProblemDetailsHandler,
-  updateProblemLocationTool,
-  updateProblemLocationHandler,
-  getUserRecentProblemsTool,
-  getUserRecentProblemsHandler,
-  updateProblemDescriptionTool,
-  updateProblemDescriptionHandler,
-} from "./problems";
-
-import {
-  uploadImageTool,
-  uploadImageHandler,
-} from "./upload-image";
+  verifyInformationTool,
+  verifyInformationHandler,
+  reportCyberThreatTool,
+  reportCyberThreatHandler,
+  getOfficialInfoTool,
+  getOfficialInfoHandler,
+  checkThreatPatternsTool,
+  checkThreatPatternsHandler,
+} from "./verification";
 
 export type { ToolContext, ToolDefinition, ToolHandler } from "./types";
 
+// Export new government verification tools
 export const toolDefinitions: ToolDefinition[] = [
-  reportProblemTool,
-  upvoteProblemTool,
-  listTopProblemsTool,
-  getProblemDetailsTool,
-  updateProblemLocationTool,
-  getUserRecentProblemsTool,
-  updateProblemDescriptionTool,
-  uploadImageTool,
+  verifyInformationTool,
+  reportCyberThreatTool,
+  getOfficialInfoTool,
+  checkThreatPatternsTool,
 ];
 
 export const toolHandlers: Record<string, ToolHandler> = {
-  report_problem: reportProblemHandler,
-  upvote_problem: upvoteProblemHandler,
-  list_top_problems: listTopProblemsHandler,
-  get_problem_details: getProblemDetailsHandler,
-  update_problem_location: updateProblemLocationHandler,
-  get_user_recent_problems: getUserRecentProblemsHandler,
-  update_problem_description: updateProblemDescriptionHandler,
-  upload_image: uploadImageHandler,
+  verify_information: verifyInformationHandler,
+  report_cyber_threat: reportCyberThreatHandler,
+  get_official_info: getOfficialInfoHandler,
+  check_threat_patterns: checkThreatPatternsHandler,
 };

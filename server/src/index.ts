@@ -1,8 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import { logger } from "./logger";
 import { config } from "./config";
-import { CrowdsourceAgent } from "./crowdsource-agent";
-import { PrismaClient } from "@prisma/client";
+import { GovVerifyAgent } from "./gov-verifyAgent";
 import cors from "cors";
 import path from "path";
 
@@ -13,7 +12,7 @@ app.use(cors({
   credentials: true
 }));
 
-let agent: CrowdsourceAgent;
+let agent: GovVerifyAgent;
 
 // Helper to detect if string is base64 or binary data
 function isBinaryOrBase64(str: string): boolean {
@@ -36,9 +35,9 @@ function isBinaryOrBase64(str: string): boolean {
 // Initialize agent
 (async () => {
   try {
-    agent = new CrowdsourceAgent();
+    agent = new GovVerifyAgent();
     await agent.initialize();
-    logger.info("Crowdsource Agent initialized successfully");
+    logger.info("Government Verification Agent initialized successfully");
   } catch (error) {
     logger.error({ error }, "Failed to initialize agent");
     process.exit(1);
@@ -70,7 +69,7 @@ app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.get("/health", (req: Request, res: Response) => {
   res.json({
     status: "healthy",
-    service: "crowdsource-agent",
+    service: "gov-verify-agent",
     activeConversations: agent ? agent.getActiveConversationsCount() : 0,
   });
 });
