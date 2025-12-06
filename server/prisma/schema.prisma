@@ -1,0 +1,75 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum ProblemStatus {
+  REPORTED
+  IN_REVIEW
+  IN_PROGRESS
+  RESOLVED
+  REJECTED
+}
+
+model Problem {
+  id              Int             @id @default(autoincrement())
+  reporterPhone   String          @map("reporter_phone")
+  rawMessage      String          @map("raw_message")
+  title           String
+  locationText    String?         @map("location_text")
+  latitude        Float?
+  longitude       Float?
+  locationVerified Boolean        @default(false) @map("location_verified")
+  locationSource  String?         @map("location_source") // "whatsapp_share" | "text_extracted" | "manual"
+  nationalCategory String?        @map("national_category")
+  recommendedOffice String?       @map("recommended_office")
+  status          ProblemStatus   @default(REPORTED)
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @default(now()) @updatedAt @map("updated_at")
+  upvoteCount     Int             @default(0) @map("upvote_count")
+
+  upvotes         ProblemUpvote[]
+  images          ProblemImage[]
+  media           Media[]
+
+  @@map("problems")
+}
+
+model ProblemImage {
+  id        Int      @id @default(autoincrement())
+  problemId Int      @map("problem_id")
+  url       String
+  mimeType  String   @map("mime_type")
+  size      Int
+  createdAt DateTime @default(now()) @map("created_at")
+  problem   Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@map("problem_images")
+}
+
+model ProblemUpvote {
+  problemId  Int     @map("problem_id")
+  voterPhone String  @map("voter_phone")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  problem    Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@id([problemId, voterPhone])
+  @@map("problem_upvotes")
+}
+
+model Media {
+  id        Int      @id @default(autoincrement())
+  problemId Int      @map("problem_id")
+  url       String
+  mimeType  String   @map("mime_type")
+  size      Int
+  createdAt DateTime @default(now()) @map("created_at")
+  problem   Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@map("media")
+}

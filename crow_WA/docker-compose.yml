@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  aidex-whatsapp:
+    build: .
+    container_name: aidex-whatsapp-server
+    ports:
+      - "3700:3700"
+    environment:
+      - NODE_ENV=production
+      - CLIENT_PHONE_E164=${CLIENT_PHONE_E164:-+1234567890}
+      - PORT=3700
+      - API_KEY=${API_KEY:-your_api_key_here}
+      - BRAND_NAME=${BRAND_NAME:-AIDeX}
+      - BRAND_TAGLINE=${BRAND_TAGLINE:-WhatsApp AI Assistant}
+    volumes:
+      # Persist WhatsApp session data
+      - whatsapp_sessions:/usr/src/app/.wwebjs_auth
+      - whatsapp_cache:/usr/src/app/.wwebjs_cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3700/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits (ultra-efficient for Alpine)
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.2'
+        reservations:
+          memory: 128M
+          cpus: '0.05'
+    # Additional memory and process limits
+    mem_limit: 256m
+    memswap_limit: 256m
+    oom_kill_disable: false
+    shm_size: 32m
+
+volumes:
+  whatsapp_sessions:
+    driver: local
+  whatsapp_cache:
+    driver: local
