@@ -247,7 +247,7 @@ model OfficialInformation {
   @@index([publishedDate])
 }
 
-// Official Information Requests (Analytics)
+// Official Information Requests (Analytics & Data Gap Tracking)
 model InformationRequest {
   id                    Int                     @id @default(autoincrement())
   topic                 String                  // What user asked about
@@ -263,12 +263,22 @@ model InformationRequest {
   officialInfoId        Int?                    @map("official_info_id")
   officialInfo          OfficialInformation?    @relation(fields: [officialInfoId], references: [id])
   responseText          String?                 @db.Text @map("response_text")
+  answeredAt            DateTime?               @map("answered_at")
+  
+  // Data gap tracking (selling point!)
+  isDataGap             Boolean                 @default(false) @map("is_data_gap") // True if no data available
+  requestCount          Int                     @default(1) @map("request_count") // How many times requested
+  priority              String                  @default("NORMAL") // NORMAL, HIGH, URGENT
+  assignedTo            String?                 @map("assigned_to") // Admin assigned to fulfill
+  fulfillmentNotes      String?                 @db.Text @map("fulfillment_notes")
   
   @@map("information_requests")
   @@index([requesterPhone])
   @@index([topic])
   @@index([category])
   @@index([requestedAt])
+  @@index([isDataGap])
+  @@index([wasAnswered])
 }
 
 // User Feedback on Verifications

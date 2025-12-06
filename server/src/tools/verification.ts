@@ -249,13 +249,19 @@ export const verifyInformationHandler: ToolHandler = async (args, context) => {
         );
       } else {
         ragResponse = "No relevant information found in government documents for this query.";
-        logger.info("No matches found in embeddings search");
+        logger.info("No matches found in embeddings search - DATA GAP DETECTED");
+        
+        // ⚠️ NOTE: AI should call escalate_information_request tool if this is a legitimate request
+        // We no longer automatically log here - let AI decide if it's worth escalating
       }
     } catch (ragError: any) {
       logger.error({ error: ragError.message, claim }, "GenelineX Embeddings Search API call failed");
 
       // Fallback response if RAG fails
       ragResponse = "Unable to verify this information against official sources at this time. Please check official government channels or contact relevant ministries directly.";
+      
+      // ⚠️ NOTE: AI should call escalate_information_request with HIGH priority for API failures
+      // We no longer automatically log here - let AI decide based on context
     }
 
     // Store verification request in database with PENDING status
@@ -650,6 +656,216 @@ export const checkThreatPatternsHandler: ToolHandler = async (args, context) => 
       success: false,
       error: error.message,
       message: "Unable to check threat patterns at this time.",
+    };
+  }
+};
+
+// ==================== ESCALATE INFORMATION REQUEST ====================
+
+/**
+ * Tool: escalate_information_request
+ * 
+ * When the AI cannot find information in the RAG system or official sources,
+ * use this tool to escalate the request. This creates a data gap entry that:
+ * - Tracks what citizens are asking for but can't be answered
+ * - Notifies government about missing information
+ * - Allows follow-up when information becomes available
+ * 
+ * WHEN TO USE:
+ * - RAG system returns no relevant documents
+ * - Question is valid but no official information exists
+ * - User asks about specific topics not covered in government docs
+ * 
+ * DO NOT USE FOR:
+ * - Personal questions ("Do you know Mr. Rath?")
+ * - Off-topic questions unrelated to government services
+ * - Casual conversation or greetings
+ */
+export const escalateInformationRequestTool: ToolDefinition = {
+  type: "function",
+  function: {
+    name: "escalate_information_request",
+    description: `Escalate an information request when official data is not available in the system. 
+    
+Use this tool when:
+- User asks about government services/policies/procedures but RAG returns no results
+- Question is legitimate but information doesn't exist in our database
+- User needs official information that should be added to the system
+
+DO NOT use for:
+- Personal questions ("Do you know Mr. Rath?")
+- Off-topic questions
+- Casual conversation
+
+This creates a data gap entry so government can add the missing information.`,
+    parameters: {
+      type: "object",
+      properties: {
+        topic: {
+          type: "string",
+          description: "The specific question or topic the user is asking about (original user query)",
+        },
+        category: {
+          type: "string",
+          enum: [
+            "HEALTH",
+            "EDUCATION",
+            "LEGAL",
+            "FINANCIAL",
+            "ADMINISTRATIVE",
+            "SECURITY",
+            "EMPLOYMENT",
+            "INFRASTRUCTURE",
+            "ENVIRONMENT",
+            "SOCIAL_SERVICES",
+            "GENERAL",
+          ],
+          description: "Category of the information request",
+        },
+        priority: {
+          type: "string",
+          enum: ["NORMAL", "HIGH", "URGENT"],
+          description: "Priority level: NORMAL (general info), HIGH (important service), URGENT (time-sensitive/emergency)",
+          default: "NORMAL",
+        },
+        ministry: {
+          type: "string",
+          description: "Relevant ministry that should have this information (e.g., 'Ministry of Health')",
+        },
+        reason: {
+          type: "string",
+          description: "Brief explanation of why information is not available (e.g., 'No documents found in RAG', 'Topic not covered in official sources')",
+        },
+      },
+      required: ["topic", "category", "reason"],
+    },
+  },
+};
+
+export const escalateInformationRequestHandler: ToolHandler = async (args, context) => {
+  const { topic, category, priority = "NORMAL", ministry, reason } = args;
+
+  try {
+    logger.info(
+      { 
+        topic, 
+        category, 
+        priority,
+        phone: context.currentUserPhone 
+      }, 
+      "📊 Escalating information request - data gap detected"
+    );
+
+    // Check if there's already a request for this topic
+    const existingRequest = await context.prisma.informationRequest.findFirst({
+      where: {
+        topic: topic,
+        category: category,
+        isDataGap: true,
+        wasAnswered: false,
+      },
+    });
+
+    let requestId: number;
+    let requestCount: number;
+
+    if (existingRequest) {
+      // Increment request count for existing topic
+      const updated = await context.prisma.informationRequest.update({
+        where: { id: existingRequest.id },
+        data: {
+          requestCount: { increment: 1 },
+          requestedAt: new Date(), // Update to latest request time
+          // Upgrade priority if current request is higher
+          priority: priority === "URGENT" || (priority === "HIGH" && existingRequest.priority === "NORMAL") 
+            ? priority 
+            : existingRequest.priority,
+        },
+      });
+      
+      requestId = updated.id;
+      requestCount = updated.requestCount;
+      
+      logger.info(
+        { 
+          requestId,
+          topic, 
+          requestCount 
+        }, 
+        "📈 Incremented existing data gap request"
+      );
+    } else {
+      // Create new information request
+      const newRequest = await context.prisma.informationRequest.create({
+        data: {
+          topic: topic,
+          category: category,
+          ministry: ministry,
+          requesterPhone: context.currentUserPhone || "unknown",
+          requestedAt: new Date(),
+          isDataGap: true,
+          requestCount: 1,
+          priority: priority,
+          wasAnswered: false,
+        },
+      });
+      
+      requestId = newRequest.id;
+      requestCount = 1;
+      
+      logger.info(
+        { 
+          requestId,
+          topic, 
+          category 
+        }, 
+        "✅ Created new data gap request"
+      );
+    }
+
+    // Log activity for tracking
+    await context.prisma.activityLog.create({
+      data: {
+        action: "information_request_escalated",
+        userPhone: context.currentUserPhone || "unknown",
+        timestamp: new Date(),
+        details: {
+          requestId,
+          topic,
+          category,
+          priority,
+          reason,
+          requestCount,
+        },
+      },
+    });
+
+    // Generate user-friendly message
+    const priorityEmoji = priority === "URGENT" ? "🚨" : priority === "HIGH" ? "⚠️" : "📋";
+    const countMessage = requestCount > 1 
+      ? ` (${requestCount} citizens have asked about this)` 
+      : "";
+
+    return {
+      success: true,
+      requestId,
+      requestCount,
+      message: `${priorityEmoji} Your request has been recorded (Request #${requestId})${countMessage}.
+
+We don't have official information about "${topic}" yet, but your question helps us identify what information citizens need.
+
+${ministry ? `This will be forwarded to the ${ministry}.` : "This will be forwarded to the relevant ministry."}
+
+You can check back later, or we'll notify you when this information becomes available.
+
+Thank you for helping us improve our service! 🙏`,
+    };
+  } catch (error: any) {
+    logger.error({ error, topic }, "Error escalating information request");
+    return {
+      success: false,
+      error: error.message,
+      message: "Unable to record your request at this time. Please try again later.",
     };
   }
 };

@@ -12,6 +12,8 @@ import {
   getOfficialInfoHandler,
   checkThreatPatternsTool,
   checkThreatPatternsHandler,
+  escalateInformationRequestTool,
+  escalateInformationRequestHandler,
 } from "./verification";
 
 export type { ToolContext, ToolDefinition, ToolHandler } from "./types";
@@ -23,6 +25,7 @@ export const toolDefinitions: ToolDefinition[] = [
   reportCyberThreatTool,
   getOfficialInfoTool,
   checkThreatPatternsTool,
+  escalateInformationRequestTool,
 ];
 
 export const toolHandlers: Record<string, ToolHandler> = {
@@ -31,4 +34,5 @@ export const toolHandlers: Record<string, ToolHandler> = {
   report_cyber_threat: reportCyberThreatHandler,
   get_official_info: getOfficialInfoHandler,
   check_threat_patterns: checkThreatPatternsHandler,
+  escalate_information_request: escalateInformationRequestHandler,
 };

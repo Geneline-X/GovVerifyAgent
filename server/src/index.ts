@@ -5,6 +5,12 @@ import { GovVerifyAgent } from "./gov-verifyAgent";
 import cors from "cors";
 import path from "path";
 
+// Import routes
+import analyticsRoutes from "./routes/analytics";
+import citizenEngagementRoutes from "./routes/citizen-engagement";
+import documentFeedsRoutes from "./routes/document-feeds";
+import citizenStatsRoutes from "./routes/citizen-stats";
+
 const app = express();
 app.use(express.json());
 app.use(cors({
@@ -64,6 +70,11 @@ function requireApiKey(req: Request, res: Response, next: NextFunction): void {
 // Serve uploaded files
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
+// API Routes
+app.use("/api/analytics", analyticsRoutes);
+app.use("/api/citizen-engagement", citizenEngagementRoutes);
+app.use("/api/feeds", documentFeedsRoutes);
+app.use("/api/citizen-stats", citizenStatsRoutes);
 
 // Health check
 app.get("/health", (req: Request, res: Response) => {
