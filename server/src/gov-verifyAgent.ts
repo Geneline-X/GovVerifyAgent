@@ -316,12 +316,176 @@ Your mission: Empower Sierra Leonean citizens with verified information and prot
     logger.info({ model: config.openai.model }, "Government Verification Agent initialized");
   }
 
+  // ==================== REAL-TIME DATA TRACKING ====================
+
+  /**
+   * Ensure user exists in database and update their last active time
+   */
+  private async ensureUserExists(phoneE164: string): Promise<void> {
+    try {
+      await this.prisma.user.upsert({
+        where: { phoneE164 },
+        update: {
+          lastActiveAt: new Date(),
+        },
+        create: {
+          phoneE164,
+          role: "CITIZEN",
+          lastActiveAt: new Date(),
+          createdAt: new Date(),
+        },
+      });
+    } catch (error: any) {
+      logger.error({ error: error.message, phoneE164 }, "Failed to upsert user");
+    }
+  }
+
+  /**
+   * Log user activity to activity_logs table
+   */
+  private async logActivity(
+    action: string,
+    userPhone: string,
+    details?: any
+  ): Promise<void> {
+    try {
+      await this.prisma.activityLog.create({
+        data: {
+          action,
+          userPhone,
+          details: details || undefined,
+          timestamp: new Date(),
+        },
+      });
+    } catch (error: any) {
+      logger.error({ error: error.message, action, userPhone }, "Failed to log activity");
+    }
+  }
+
+  /**
+   * Update or create daily statistics
+   */
+  private async updateDailyStats(updates: {
+    verificationAdded?: boolean;
+    verificationStatus?: string;
+    threatAdded?: boolean;
+    isUrgentThreat?: boolean;
+    amountLost?: number;
+    isNewUser?: boolean;
+    responseTimeMs?: number;
+  }): Promise<void> {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Get existing stats or create new
+      let stats = await this.prisma.dailyStatistics.findUnique({
+        where: { date: today },
+      });
+
+      if (!stats) {
+        stats = await this.prisma.dailyStatistics.create({
+          data: {
+            date: today,
+            totalVerifications: 0,
+            verifiedTrue: 0,
+            verifiedFalse: 0,
+            verifiedPartial: 0,
+            unverified: 0,
+            totalThreats: 0,
+            urgentThreats: 0,
+            totalAmountLostDaily: 0,
+            activeUsers: 0,
+            newUsers: 0,
+            avgResponseTimeMs: null,
+          },
+        });
+      }
+
+      // Build update object
+      const updateData: any = {};
+
+      if (updates.verificationAdded) {
+        updateData.totalVerifications = { increment: 1 };
+        
+        if (updates.verificationStatus === "VERIFIED") {
+          updateData.verifiedTrue = { increment: 1 };
+        } else if (updates.verificationStatus === "FALSE") {
+          updateData.verifiedFalse = { increment: 1 };
+        } else if (updates.verificationStatus === "PARTIALLY_TRUE") {
+          updateData.verifiedPartial = { increment: 1 };
+        } else if (updates.verificationStatus === "UNVERIFIED") {
+          updateData.unverified = { increment: 1 };
+        }
+      }
+
+      if (updates.threatAdded) {
+        updateData.totalThreats = { increment: 1 };
+        if (updates.isUrgentThreat) {
+          updateData.urgentThreats = { increment: 1 };
+        }
+        if (updates.amountLost && updates.amountLost > 0) {
+          updateData.totalAmountLostDaily = { increment: updates.amountLost };
+        }
+      }
+
+      if (updates.isNewUser) {
+        updateData.newUsers = { increment: 1 };
+      }
+
+      // Update active users count (count distinct users today)
+      const activeUsersCount = await this.prisma.activityLog.findMany({
+        where: {
+          timestamp: {
+            gte: today,
+          },
+        },
+        select: { userPhone: true },
+        distinct: ["userPhone"],
+      });
+      updateData.activeUsers = activeUsersCount.length;
+
+      // Update average response time
+      if (updates.responseTimeMs) {
+        const currentAvg = stats.avgResponseTimeMs || 0;
+        const currentCount = stats.totalVerifications;
+        const newAvg = currentCount > 0 
+          ? Math.round((currentAvg * currentCount + updates.responseTimeMs) / (currentCount + 1))
+          : updates.responseTimeMs;
+        updateData.avgResponseTimeMs = newAvg;
+      }
+
+      // Apply updates
+      if (Object.keys(updateData).length > 0) {
+        await this.prisma.dailyStatistics.update({
+          where: { date: today },
+          data: updateData,
+        });
+      }
+    } catch (error: any) {
+      logger.error({ error: error.message, updates }, "Failed to update daily stats");
+    }
+  }
+
+  /**
+   * Track conversation message in activity log
+   */
+  private async trackConversationMessage(phoneE164: string, messageType: string): Promise<void> {
+    await this.logActivity("conversation_message", phoneE164, {
+      messageType,
+      timestamp: new Date().toISOString(),
+      source: "WhatsApp",
+    });
+  }
+
   async processMessage(
     userMessage: string,
     phoneE164: string,
     locationContext?: LocationContext,
     mediaContext?: MediaContext
   ): Promise<string> {
+    const startTime = Date.now();
+    
     try {
       logger.info(
         {
@@ -331,6 +495,12 @@ Your mission: Empower Sierra Leonean citizens with verified information and prot
         },
         "Processing user message"
       );
+
+      // ✅ REAL-TIME TRACKING: Ensure user exists and update last active
+      await this.ensureUserExists(phoneE164);
+      
+      // ✅ REAL-TIME TRACKING: Log incoming message activity
+      await this.trackConversationMessage(phoneE164, "user_message");
 
       this.currentUserPhone = phoneE164;
       this.currentLocationContext = locationContext;
@@ -428,11 +598,23 @@ Your mission: Empower Sierra Leonean citizens with verified information and prot
           content: finalMessage.content,
         });
 
+        // ✅ REAL-TIME TRACKING: Log assistant response
+        await this.trackConversationMessage(phoneE164, "assistant_response");
+        
+        // ✅ REAL-TIME TRACKING: Calculate and log response time
+        const responseTime = Date.now() - startTime;
+        await this.logActivity("message_processed", phoneE164, {
+          responseTimeMs: responseTime,
+          messageLength: finalMessage.content.length,
+          toolCallsUsed: loopCount,
+        });
+
         logger.info(
           {
             phoneE164,
             responseLength: finalMessage.content.length,
             totalMessages: messages.length,
+            responseTimeMs: responseTime,
           },
           "Returning assistant response"
         );
@@ -444,6 +626,13 @@ Your mission: Empower Sierra Leonean citizens with verified information and prot
       return "Sorry, I encountered an issue processing your request. Please try again.";
     } catch (error: any) {
       logger.error({ error: error.message, stack: error.stack, phoneE164 }, "Error processing message");
+      
+      // ✅ REAL-TIME TRACKING: Log error
+      await this.logActivity("message_error", phoneE164, {
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
+      
       return "Sorry, I encountered an error. Please try again later.";
     }
   }

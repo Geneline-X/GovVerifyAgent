@@ -2,6 +2,135 @@ import { logger } from "../logger";
 import { config } from "../config";
 import type { ToolDefinition, ToolHandler } from "./types";
 import axios from "axios";
+import type { PrismaClient } from "@prisma/client";
+
+// ==================== HELPER FUNCTIONS FOR REAL-TIME STATS ====================
+
+/**
+ * Update daily statistics when verification events occur
+ */
+async function updateDailyStatisticsForVerification(
+  prisma: PrismaClient,
+  status: string,
+  responseTimeMs?: number
+): Promise<void> {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Get or create today's stats
+    let stats = await prisma.dailyStatistics.findUnique({
+      where: { date: today },
+    });
+
+    if (!stats) {
+      stats = await prisma.dailyStatistics.create({
+        data: {
+          date: today,
+          totalVerifications: 0,
+          verifiedTrue: 0,
+          verifiedFalse: 0,
+          verifiedPartial: 0,
+          unverified: 0,
+          totalThreats: 0,
+          urgentThreats: 0,
+          totalAmountLostDaily: 0,
+          activeUsers: 0,
+          newUsers: 0,
+        },
+      });
+    }
+
+    // Build update data
+    const updateData: any = {
+      totalVerifications: { increment: 1 },
+    };
+
+    if (status === "VERIFIED") {
+      updateData.verifiedTrue = { increment: 1 };
+    } else if (status === "FALSE") {
+      updateData.verifiedFalse = { increment: 1 };
+    } else if (status === "PARTIALLY_TRUE") {
+      updateData.verifiedPartial = { increment: 1 };
+    } else if (status === "UNVERIFIED") {
+      updateData.unverified = { increment: 1 };
+    }
+
+    // Update average response time
+    if (responseTimeMs) {
+      const currentAvg = stats.avgResponseTimeMs || 0;
+      const currentCount = stats.totalVerifications;
+      const newAvg =
+        currentCount > 0
+          ? Math.round((currentAvg * currentCount + responseTimeMs) / (currentCount + 1))
+          : responseTimeMs;
+      updateData.avgResponseTimeMs = newAvg;
+    }
+
+    await prisma.dailyStatistics.update({
+      where: { date: today },
+      data: updateData,
+    });
+  } catch (error: any) {
+    logger.error({ error: error.message }, "Failed to update daily statistics for verification");
+  }
+}
+
+/**
+ * Update daily statistics when threat reports are created
+ */
+async function updateDailyStatisticsForThreat(
+  prisma: PrismaClient,
+  isUrgent: boolean,
+  amountLost?: number
+): Promise<void> {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Get or create today's stats
+    let stats = await prisma.dailyStatistics.findUnique({
+      where: { date: today },
+    });
+
+    if (!stats) {
+      stats = await prisma.dailyStatistics.create({
+        data: {
+          date: today,
+          totalVerifications: 0,
+          verifiedTrue: 0,
+          verifiedFalse: 0,
+          verifiedPartial: 0,
+          unverified: 0,
+          totalThreats: 0,
+          urgentThreats: 0,
+          totalAmountLostDaily: 0,
+          activeUsers: 0,
+          newUsers: 0,
+        },
+      });
+    }
+
+    const updateData: any = {
+      totalThreats: { increment: 1 },
+    };
+
+    if (isUrgent) {
+      updateData.urgentThreats = { increment: 1 };
+    }
+
+    if (amountLost && amountLost > 0) {
+      updateData.totalAmountLostDaily = { increment: amountLost };
+    }
+
+    await prisma.dailyStatistics.update({
+      where: { date: today },
+      data: updateData,
+    });
+  } catch (error: any) {
+    logger.error({ error: error.message }, "Failed to update daily statistics for threat");
+  }
+}
 
 // ==================== VERIFY INFORMATION ====================
 
@@ -39,6 +168,7 @@ export const verifyInformationTool: ToolDefinition = {
 
 export const verifyInformationHandler: ToolHandler = async (args, context) => {
   const { claim, category } = args;
+  const startTime = Date.now(); // Track response time
 
   try {
     logger.info({ claim, category, phone: context.currentUserPhone }, "Verifying information via GenelineX RAG");
@@ -143,10 +273,18 @@ export const verifyInformationHandler: ToolHandler = async (args, context) => {
         ragChatbotId: config.genelineX.indexName,
         ragProcessedAt: new Date(),
         sources: sources.length > 0 ? sources : undefined,
+        responseTimeMs: Date.now() - startTime, // Store actual response time
       },
     });
 
     logger.info({ verificationId: verification.id }, "Verification request stored, awaiting GPT judgment");
+
+    // ✅ REAL-TIME STATS: Update daily statistics for new verification
+    await updateDailyStatisticsForVerification(
+      context.prisma,
+      "PENDING",
+      Date.now() - startTime
+    );
 
     // Return RAG response to GPT for analysis
     // GPT will read this response and decide if claim is VERIFIED, FALSE, PARTIALLY_TRUE, or UNVERIFIED
@@ -359,6 +497,13 @@ export const reportCyberThreatHandler: ToolHandler = async (args, context) => {
     });
 
     logger.info({ refNumber, reportId: report.id }, "Cyber threat report created");
+
+    // ✅ REAL-TIME STATS: Update daily statistics for new threat report
+    await updateDailyStatisticsForThreat(
+      context.prisma,
+      isUrgent,
+      amountLost
+    );
 
     return {
       success: true,
