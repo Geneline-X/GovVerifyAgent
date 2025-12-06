@@ -85,12 +85,6 @@ model User {
   createdAt             DateTime                @default(now()) @map("created_at")
   lastActiveAt          DateTime                @default(now()) @map("last_active_at")
   
-  // Relations
-  verifications         Verification[]
-  threatReports         CyberThreatReport[]
-  infoRequests          InformationRequest[]
-  feedbacks             UserFeedback[]
-  
   @@map("users")
   @@index([phoneE164])
   @@index([role])
@@ -103,9 +97,8 @@ model Verification {
   category              InformationCategory
   status                VerificationStatus      @default(PENDING)
   
-  // User information
+  // User information (no foreign key - just store phone number)
   requesterPhone        String                  @map("requester_phone")
-  user                  User?                   @relation(fields: [requesterPhone], references: [phoneE164])
   
   // Verification details
   requestedAt           DateTime                @default(now()) @map("requested_at")
@@ -155,9 +148,8 @@ model CyberThreatReport {
   isUrgent              Boolean                 @default(false) @map("is_urgent")
   status                ThreatReportStatus      @default(PENDING)
   
-  // Reporter information
+  // Reporter information (no foreign key - just store phone number)
   reporterPhone         String                  @map("reporter_phone")
-  user                  User?                   @relation(fields: [reporterPhone], references: [phoneE164])
   reportedAt            DateTime                @default(now()) @map("reported_at")
   
   // Evidence
@@ -262,9 +254,8 @@ model InformationRequest {
   category              InformationCategory?
   ministry              String?                 // Relevant ministry
   
-  // User information
+  // User information (no foreign key - just store phone number)
   requesterPhone        String                  @map("requester_phone")
-  user                  User?                   @relation(fields: [requesterPhone], references: [phoneE164])
   requestedAt           DateTime                @default(now()) @map("requested_at")
   
   // Response
@@ -286,9 +277,8 @@ model UserFeedback {
   verificationId        Int                     @map("verification_id")
   verification          Verification            @relation(fields: [verificationId], references: [id], onDelete: Cascade)
   
-  // Feedback details
+  // Feedback details (no foreign key for user - just store phone number)
   userPhone             String                  @map("user_phone")
-  user                  User?                   @relation(fields: [userPhone], references: [phoneE164])
   isCorrect             Boolean?                @map("is_correct") // User agrees with verification?
   comment               String?                 @db.Text
   submittedAt           DateTime                @default(now()) @map("submitted_at")

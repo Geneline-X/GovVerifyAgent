@@ -21,9 +21,12 @@ export const config = {
   },
   
   genelineX: {
-    apiUrl: process.env.GENELINE_X_API_URL || "https://message.geneline-x.net/api/v1/message",
+    apiUrl: process.env.GENELINE_X_API_URL || "https://message.geneline-x.net/api/v1/embeddings/search",
     apiKey: process.env.GENELINE_X_API_KEY || "b5a5a2b9aadef40dec688ed92b1464e59719deb13b6d7425820b30c16d21392d",
-    chatbotId: process.env.GENELINE_X_CHATBOT_ID || "cmis6o6ps0001l404u6l8hizq",
+    indexName: process.env.GENELINE_X_INDEX_NAME || "interact",
+    namespace: process.env.GENELINE_X_NAMESPACE || "gov-info",
+    topK: parseInt(process.env.GENELINE_X_TOP_K || "5", 10),
+    chatbotId: ""
   },
   
   database: {

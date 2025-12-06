@@ -10,7 +10,7 @@ export const verifyInformationTool: ToolDefinition = {
   function: {
     name: "verify_information",
     description:
-      "Verify a claim or piece of information against official government sources. Use this when a user asks if something is true or forwards a suspicious message.",
+      "ALWAYS use this tool to verify claims or answer factual questions about Sierra Leone government, policies, health (especially kush/drugs), security, finances, or any official information. Use whenever user asks 'Is this true?', 'I want to verify...', 'Can you check...', 'When did...', 'What year...', 'How much...', or asks any factual question. This queries official government sources via GenelineX RAG system. DO NOT answer factual questions from memory - ALWAYS call this tool first.",
     parameters: {
       type: "object",
       properties: {
@@ -43,25 +43,37 @@ export const verifyInformationHandler: ToolHandler = async (args, context) => {
   try {
     logger.info({ claim, category, phone: context.currentUserPhone }, "Verifying information via GenelineX RAG");
 
+    // Map category string to enum value
+    const categoryMap: Record<string, string> = {
+      "Government Policy": "GOVERNMENT_POLICY",
+      "Health": "HEALTH",
+      "Security": "SECURITY",
+      "Financial": "FINANCIAL",
+      "Legal": "LEGAL",
+      "Administrative": "ADMINISTRATIVE",
+      "Other": "OTHER",
+    };
+    
+    const categoryEnum = categoryMap[category] || "OTHER";
+
     // Query GenelineX RAG API with the claim
     let ragResponse: string;
-    let confidence: string;
-    let sources: string[] = [];
-    let status: "VERIFIED" | "PARTIALLY_TRUE" | "FALSE" | "UNVERIFIED";
+    let sources: any[] = [];
 
     try {
-      logger.info({ claim, chatbotId: config.genelineX.chatbotId }, "Calling GenelineX RAG API");
+      logger.info({ claim, indexName: config.genelineX.indexName }, "Calling GenelineX Embeddings Search API");
 
       const response = await axios.post(
         config.genelineX.apiUrl,
         {
-          chatbotId: config.genelineX.chatbotId,
-          email: context.currentUserPhone || "anonymous@govverify.sl",
-          message: `Verify this claim: "${claim}"\n\nCategory: ${category}\n\nPlease provide: 1) Is this true or false? 2) Official sources 3) Any relevant details.`,
+          indexName: config.genelineX.indexName,
+          namespace: config.genelineX.namespace,
+          query: claim,
+          topK: config.genelineX.topK,
         },
         {
           headers: {
-            accept: "text/plain",
+            accept: "application/json",
             Authorization: `Bearer ${config.genelineX.apiKey}`,
             "Content-Type": "application/json",
           },
@@ -69,96 +81,82 @@ export const verifyInformationHandler: ToolHandler = async (args, context) => {
         }
       );
 
-      ragResponse = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
-
-      logger.info(
-        {
-          responseLength: ragResponse.length,
-          responsePreview: ragResponse.substring(0, 200),
-        },
-        "GenelineX RAG response received"
-      );
-
-      // Analyze the response to determine verification status
-      const responseLower = ragResponse.toLowerCase();
-
-      if (
-        responseLower.includes("verified") ||
-        responseLower.includes("confirmed") ||
-        responseLower.includes("true") ||
-        responseLower.includes("accurate")
-      ) {
-        status = "VERIFIED";
-        confidence = "HIGH";
-      } else if (
-        responseLower.includes("false") ||
-        responseLower.includes("incorrect") ||
-        responseLower.includes("not true") ||
-        responseLower.includes("misinformation")
-      ) {
-        status = "FALSE";
-        confidence = "HIGH";
-      } else if (responseLower.includes("partially") || responseLower.includes("some truth")) {
-        status = "PARTIALLY_TRUE";
-        confidence = "MEDIUM";
+      // Extract matches from the embeddings search response
+      const matches = response.data?.matches || [];
+      
+      if (matches.length > 0) {
+        // Build a comprehensive response from the top matches
+        const topMatches = matches.slice(0, 3); // Use top 3 most relevant matches
+        
+        // Combine the text from matches
+        const combinedText = topMatches
+          .map((match: any, idx: number) => {
+            const metadata = match.metadata || {};
+            return `[Source ${idx + 1}] ${metadata.text || "No text available"}`;
+          })
+          .join("\n\n");
+        
+        ragResponse = `Based on official government documents:\n\n${combinedText}`;
+        
+        // Extract sources for database storage
+        sources = topMatches.map((match: any) => {
+          const metadata = match.metadata || {};
+          return {
+            filename: metadata.filename || "Unknown",
+            sourceUrl: metadata.sourceUrl || null,
+            score: match.score || 0,
+            chunkIndex: metadata.chunkIndex,
+          };
+        });
+        
+        logger.info(
+          {
+            matchCount: matches.length,
+            topScore: matches[0]?.score || 0,
+            sourcesExtracted: sources.length,
+          },
+          "GenelineX Embeddings Search response received"
+        );
       } else {
-        status = "UNVERIFIED";
-        confidence = "LOW";
-      }
-
-      // Extract sources if mentioned (simple heuristic)
-      const sourceMatches = ragResponse.match(
-        /(ministry|department|official|government|source|announced|press release)[^.!?]*[.!?]/gi
-      );
-      if (sourceMatches && sourceMatches.length > 0) {
-        sources = sourceMatches.slice(0, 3); // Keep top 3 source mentions
+        ragResponse = "No relevant information found in government documents for this query.";
+        logger.info("No matches found in embeddings search");
       }
     } catch (ragError: any) {
-      logger.error({ error: ragError.message, claim }, "GenelineX RAG API call failed");
+      logger.error({ error: ragError.message, claim }, "GenelineX Embeddings Search API call failed");
 
       // Fallback response if RAG fails
       ragResponse = "Unable to verify this information against official sources at this time. Please check official government channels or contact relevant ministries directly.";
-      status = "UNVERIFIED";
-      confidence = "LOW";
     }
 
-    // Store verification request in database
+    // Store verification request in database with PENDING status
+    // GPT will analyze the RAG response and determine the actual status
     const verification = await context.prisma.verification.create({
       data: {
         claim,
-        category,
+        category: categoryEnum as any,
         requesterPhone: context.currentUserPhone,
-        status,
+        status: "PENDING",
         result: ragResponse,
-        confidence: confidence as any,
-        sources: sources.length > 0 ? JSON.stringify(sources) : null as any,
         requestedAt: new Date(),
-        verifiedAt: new Date(), // Always set since we got a response from RAG
         verifiedBy: "GenelineX RAG System",
+        ragResponse,
+        ragChatbotId: config.genelineX.indexName,
+        ragProcessedAt: new Date(),
+        sources: sources.length > 0 ? sources : undefined,
       },
     });
 
-    logger.info({ verificationId: verification.id, status, confidence }, "Verification completed");
+    logger.info({ verificationId: verification.id }, "Verification request stored, awaiting GPT judgment");
 
-    // Format status emoji
-    const statusEmoji = {
-      VERIFIED: "✅",
-      FALSE: "❌",
-      PARTIALLY_TRUE: "⚠️",
-      UNVERIFIED: "❓",
-      PENDING: "⏳",
-    };
-
+    // Return RAG response to GPT for analysis
+    // GPT will read this response and decide if claim is VERIFIED, FALSE, PARTIALLY_TRUE, or UNVERIFIED
     return {
       success: true,
       verificationId: verification.id,
-      status,
-      statusEmoji: statusEmoji[status],
-      result: ragResponse,
-      confidence,
-      sources,
-      checkedAt: new Date().toISOString(),
-      message: `Verification complete. Status: ${status}`,
+      ragResponse,
+      claim,
+      category,
+      instruction: "Analyze the RAG response above. Based on the information provided, determine if the claim is VERIFIED (true), FALSE (misinformation), PARTIALLY_TRUE (mixed), or UNVERIFIED (insufficient info). Then respond to the user with your judgment and explanation.",
     };
   } catch (error: any) {
     logger.error({ error, claim }, "Error verifying information");
@@ -166,6 +164,77 @@ export const verifyInformationHandler: ToolHandler = async (args, context) => {
       success: false,
       error: error.message,
       message: "Unable to verify this information at this time. Please try again later.",
+    };
+  }
+};
+
+// ==================== UPDATE VERIFICATION STATUS ====================
+
+export const updateVerificationStatusTool: ToolDefinition = {
+  type: "function",
+  function: {
+    name: "update_verification_status",
+    description:
+      "Update a verification record with your judgment after analyzing the RAG response. Call this after you've determined if a claim is verified, false, partially true, or unverified.",
+    parameters: {
+      type: "object",
+      properties: {
+        verificationId: {
+          type: "number",
+          description: "The ID of the verification record to update",
+        },
+        status: {
+          type: "string",
+          enum: ["VERIFIED", "FALSE", "PARTIALLY_TRUE", "UNVERIFIED"],
+          description: "Your judgment on the verification status",
+        },
+        confidence: {
+          type: "string",
+          enum: ["HIGH", "MEDIUM", "LOW"],
+          description: "Your confidence level in this judgment",
+        },
+        explanation: {
+          type: "string",
+          description: "Brief explanation of why you made this judgment",
+        },
+      },
+      required: ["verificationId", "status", "confidence", "explanation"],
+    },
+  },
+};
+
+export const updateVerificationStatusHandler: ToolHandler = async (args, context) => {
+  const { verificationId, status, confidence, explanation } = args;
+
+  try {
+    logger.info({ verificationId, status, confidence }, "Updating verification status with GPT judgment");
+
+    // Update the verification record
+    await context.prisma.verification.update({
+      where: { id: verificationId },
+      data: {
+        status,
+        confidence: confidence as any,
+        verifiedAt: new Date(),
+        verifiedBy: "GPT-4 Analysis",
+      },
+    });
+
+    logger.info({ verificationId, status }, "Verification status updated");
+
+    return {
+      success: true,
+      verificationId,
+      status,
+      confidence,
+      explanation,
+      message: "Verification judgment recorded",
+    };
+  } catch (error: any) {
+    logger.error({ error, verificationId }, "Error updating verification status");
+    return {
+      success: false,
+      error: error.message,
     };
   }
 };
@@ -241,13 +310,28 @@ export const reportCyberThreatHandler: ToolHandler = async (args, context) => {
       "Reporting cyber threat"
     );
 
+    // Map threat type string to enum value
+    const threatTypeMap: Record<string, string> = {
+      "Romance Scam": "ROMANCE_SCAM",
+      "Investment Fraud": "INVESTMENT_FRAUD",
+      "Impersonation": "IMPERSONATION",
+      "Phishing": "PHISHING",
+      "Mobile Money Fraud": "MOBILE_MONEY_FRAUD",
+      "Job Scam": "JOB_SCAM",
+      "Lottery/Prize Scam": "LOTTERY_PRIZE_SCAM",
+      "Blackmail/Sextortion": "BLACKMAIL_SEXTORTION",
+      "Other": "OTHER",
+    };
+    
+    const threatTypeEnum = threatTypeMap[threatType] || "OTHER";
+
     // Generate temporary reference number (will update after getting ID)
     const tempRefNumber = `TH-${new Date().getFullYear()}-PENDING`;
 
     // Store threat report in database
     const report = await context.prisma.cyberThreatReport.create({
       data: {
-        threatType,
+        threatType: threatTypeEnum as any,
         description,
         platform,
         amountLost: amountLost || null,

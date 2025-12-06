@@ -4,6 +4,8 @@ import type { ToolDefinition, ToolHandler } from "./types";
 import {
   verifyInformationTool,
   verifyInformationHandler,
+  updateVerificationStatusTool,
+  updateVerificationStatusHandler,
   reportCyberThreatTool,
   reportCyberThreatHandler,
   getOfficialInfoTool,
@@ -17,6 +19,7 @@ export type { ToolContext, ToolDefinition, ToolHandler } from "./types";
 // Export new government verification tools
 export const toolDefinitions: ToolDefinition[] = [
   verifyInformationTool,
+  updateVerificationStatusTool,
   reportCyberThreatTool,
   getOfficialInfoTool,
   checkThreatPatternsTool,
@@ -24,6 +27,7 @@ export const toolDefinitions: ToolDefinition[] = [
 
 export const toolHandlers: Record<string, ToolHandler> = {
   verify_information: verifyInformationHandler,
+  update_verification_status: updateVerificationStatusHandler,
   report_cyber_threat: reportCyberThreatHandler,
   get_official_info: getOfficialInfoHandler,
   check_threat_patterns: checkThreatPatternsHandler,
