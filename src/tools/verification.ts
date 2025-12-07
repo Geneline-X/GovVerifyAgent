@@ -251,8 +251,44 @@ export const verifyInformationHandler: ToolHandler = async (args, context) => {
         ragResponse = "No relevant information found in government documents for this query.";
         logger.info("No matches found in embeddings search - DATA GAP DETECTED");
         
-        // ⚠️ NOTE: AI should call escalate_information_request tool if this is a legitimate request
-        // We no longer automatically log here - let AI decide if it's worth escalating
+        // ✅ AUTO-LOG DATA GAP: Track what information citizens are looking for but not available
+        // Check if similar request already exists to avoid duplicates
+        const existingRequest = await context.prisma.informationRequest.findFirst({
+          where: {
+            topic: claim.substring(0, 500),
+            category: categoryEnum as any,
+          },
+        });
+
+        if (existingRequest) {
+          // Increment request count for existing topic
+          await context.prisma.informationRequest.update({
+            where: { id: existingRequest.id },
+            data: {
+              requestCount: { increment: 1 },
+              requestedAt: new Date(),
+            },
+          });
+          logger.info(
+            { topic: claim.substring(0, 100), requestCount: existingRequest.requestCount + 1 },
+            "Incremented existing data gap request"
+          );
+        } else {
+          // Create new data gap entry
+          await context.prisma.informationRequest.create({
+            data: {
+              topic: claim.substring(0, 500), // Limit to 500 chars
+              category: categoryEnum as any,
+              requesterPhone: context.currentUserPhone,
+              requestedAt: new Date(),
+              isDataGap: true, // Mark as data gap
+              requestCount: 1,
+              priority: "NORMAL",
+              wasAnswered: false,
+            },
+          });
+          logger.info({ claim: claim.substring(0, 100) }, "New data gap logged to information_requests table");
+        }
       }
     } catch (ragError: any) {
       logger.error({ error: ragError.message, claim }, "GenelineX Embeddings Search API call failed");
@@ -294,13 +330,18 @@ export const verifyInformationHandler: ToolHandler = async (args, context) => {
 
     // Return RAG response to GPT for analysis
     // GPT will read this response and decide if claim is VERIFIED, FALSE, PARTIALLY_TRUE, or UNVERIFIED
+    const isDataGap = ragResponse.includes("No relevant information found in government documents");
+    
     return {
       success: true,
       verificationId: verification.id,
       ragResponse,
       claim,
       category,
-      instruction: "Analyze the RAG response above. Based on the information provided, determine if the claim is VERIFIED (true), FALSE (misinformation), PARTIALLY_TRUE (mixed), or UNVERIFIED (insufficient info). Then respond to the user with your judgment and explanation.",
+      isDataGap, // Flag to let AI know this is a data gap
+      instruction: isDataGap 
+        ? "⚠️ DATA GAP DETECTED: No information found in the system. This has been automatically logged for analytics. Now YOU decide: Is this a legitimate government information request that should be escalated to HIGH priority? If yes, call escalate_information_request tool. Then respond to the user explaining the information is not available yet."
+        : "Analyze the RAG response above. Based on the information provided, determine if the claim is VERIFIED (true), FALSE (misinformation), PARTIALLY_TRUE (mixed), or UNVERIFIED (insufficient info). Then respond to the user with your judgment and explanation.",
     };
   } catch (error: any) {
     logger.error({ error, claim }, "Error verifying information");
